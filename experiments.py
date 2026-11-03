@@ -83,10 +83,10 @@ def main():
     from scipy import stats
 
     from task import WritingPath
-    from vic import Q_INIT, XML, Arm
+    from vic import Q_INIT, load_model, Arm
 
     os.makedirs(OUT, exist_ok=True)
-    arm = Arm(mujoco.MjModel.from_xml_path(XML))
+    arm = Arm(load_model())
     Lqi = arm.Lambda(Q_INIT)
     dq = np.diag(Lqi)
     summary = {"Lambda_qi": Lqi.tolist(), "Lambda_qi_eig": np.linalg.eigvalsh(Lqi).tolist()}
@@ -157,6 +157,9 @@ def main():
     rows = summarize(res_all)
     report.append("\n\n## A2-A4 Writing task, 5 simulated subjects (mean ± std)\n")
     report.append(md_table(rows))
+    report.append("\nNull-space task 'none' (damping only): the self-motion drives joint 6 into its "
+                  "+120 deg limit after ~4.5 s and the drawing is never completed (H = nan), so its "
+                  "e and path deviation describe a failed run, not accuracy.")
     summary["rows"] = rows
 
     def pick(name, red):
@@ -180,8 +183,7 @@ def main():
     scatter(ax, [(HCONST.label, "manip", "const, Man", "C3", "s"),
                  (HCONST.label, "dci", "const, DCI", "C0", "s"),
                  (L1.label, "manip", "variable, Man", "C3", "o"),
-                 (L1.label, "dci", "variable, DCI", "C0", "o"),
-                 (L1.label, "none", "variable, no null-space task", "C7", "^")],
+                 (L1.label, "dci", "variable, DCI", "C0", "o")],
             "Redundancy resolution vs performance (paper Fig. 12)")
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "A2_redundancy_performance.png"), dpi=150)
@@ -226,9 +228,8 @@ def main():
     summary["ttest"] = tt
 
     # path plots (Fig. 10 analog) + damping history (Fig. 14) + force norm (Fig. 16)
-    from writing_sim import XML as _X  # noqa
     import mujoco as mj
-    m = mj.MjModel.from_xml_path(XML)
+    m = load_model()
     d = mj.MjData(m)
     d.qpos[:] = Q_INIT
     mj.mj_forward(m, d)

@@ -31,11 +31,115 @@ import mujoco
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-XML = os.path.join(HERE, "lwr4.xml")
 
-# Paper's start configuration for the writing task (degrees), Sec. VII
+# Robot: KUKA LBR iiwa 14 from MuJoCo Menagerie (unmodified file, BSD-3-Clause),
+# the successor of the KUKA LWR4 used in the paper (same 7-DOF S-R-S kinematics and
+# joint sign convention).
+MODEL_DIR = os.path.join(HERE, "models", "kuka_iiwa_14")
+ROBOT_XML = os.path.join(MODEL_DIR, "iiwa14.xml")
+PEN_LENGTH = 0.10  # paint marker mounted on the flange (attachment_site) [m]
+PEN_MASS = 0.05  # [kg]
+JOINT_FRICTION = 0.5  # viscous joint friction of the "real" robot, unknown to the controller [N m s/rad]
+
+# Paper's start configuration for the writing task (degrees), Sec. VII. On the iiwa it
+# also puts the marker vertically over the desk.
 Q_INIT_DEG = np.array([2.35, 22.8, -1.54, -53.2, -3.1, 101.15, 0.0])
 Q_INIT = np.deg2rad(Q_INIT_DEG)
+
+
+def load_model(joint_friction=JOINT_FRICTION, visual=None) -> mujoco.MjModel:
+    """Builds the simulation from the Menagerie iiwa14.xml:
+
+    * the Menagerie position servos are replaced by plain torque motors (the paper's
+      controller commands joint torques);
+    * a 0.10 m paint marker is attached to the flange (site 'pen' at its tip);
+    * viscous joint friction is added (a hardware effect the controller does not model);
+    * a desk with an A4 sheet is placed just under the marker tip at q_i.
+    Link masses, inertias and kinematics are the Menagerie values, untouched.
+    visual=False drops the display meshes (dynamics are unchanged: every body has an
+    explicit <inertial>); by default meshes are used when models/.../assets exists.
+    """
+    spec = mujoco.MjSpec.from_file(ROBOT_XML)
+    if visual is None:
+        visual = os.path.isdir(os.path.join(MODEL_DIR, "assets"))
+    if not visual:
+        for g in list(spec.geoms):
+            if g.type == mujoco.mjtGeom.mjGEOM_MESH:
+                spec.delete(g)
+        for msh in list(spec.meshes):
+            spec.delete(msh)
+
+    spec.option.timestep = 0.001  # 1 kHz, as the LWR4/iiwa FRI interface
+    spec.option.integrator = mujoco.mjtIntegrator.mjINT_EULER
+
+    # torque motors instead of the Menagerie position servos
+    for a in list(spec.actuators):
+        spec.delete(a)
+    for i in range(1, 8):
+        a = spec.add_actuator()
+        a.name, a.target = f"motor{i}", f"joint{i}"
+        a.trntype = mujoco.mjtTrn.mjTRN_JOINT
+        a.gainprm[0] = 1.0
+        a.ctrllimited = 0
+    for j in spec.joints:
+        try:
+            j.damping = joint_friction
+        except TypeError:  # newer MuJoCo stores joint damping as a 3-vector
+            j.damping = [joint_friction, 0.0, 0.0]
+
+    # paint marker on the flange; display group 2 like the arm, tip in group 1
+    pen = spec.body("link7").add_body()
+    pen.name = "pen"
+    pen.pos = [0, 0, 0.045]  # Menagerie 'attachment_site'
+    g = pen.add_geom()
+    g.type, g.fromto, g.size = mujoco.mjtGeom.mjGEOM_CYLINDER, [0, 0, 0, 0, 0, PEN_LENGTH - 0.006], [0.009, 0, 0]
+    g.mass, g.rgba, g.group, g.contype, g.conaffinity = PEN_MASS, [0.1, 0.3, 0.9, 1], 2, 0, 0
+    g = pen.add_geom()
+    g.type, g.pos, g.size = mujoco.mjtGeom.mjGEOM_SPHERE, [0, 0, PEN_LENGTH - 0.006], [0.006, 0, 0]
+    g.mass, g.rgba, g.group, g.contype, g.conaffinity = 0.0, [0.05, 0.05, 0.05, 1], 1, 0, 0
+    s = pen.add_site()
+    s.name, s.pos, s.size, s.rgba = "pen", [0, 0, PEN_LENGTH], [0.004, 0, 0], [1, 0, 0, 1]
+
+    # pen tip at q_i decides where the desk goes
+    m = spec.compile()
+    d = mujoco.MjData(m)
+    d.qpos[:] = Q_INIT
+    mujoco.mj_forward(m, d)
+    px, py, pz = d.site_xpos[m.site("pen").id]
+
+    # scene (visual only: nothing here collides)
+    spec.visual.global_.offwidth, spec.visual.global_.offheight = 1280, 720
+    spec.visual.headlight.ambient = [0.35, 0.35, 0.35]
+    spec.visual.headlight.diffuse = [0.5, 0.5, 0.5]
+    tex = spec.add_texture()
+    tex.name, tex.type, tex.builtin = "grid", mujoco.mjtTexture.mjTEXTURE_2D, mujoco.mjtBuiltin.mjBUILTIN_CHECKER
+    tex.rgb1, tex.rgb2, tex.width, tex.height = [0.82, 0.82, 0.85], [0.74, 0.74, 0.78], 512, 512
+    mat = spec.add_material()
+    mat.name, mat.texrepeat, mat.reflectance = "grid", [6, 6], 0.05
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "grid"
+    wb = spec.worldbody
+    light = wb.add_light()
+    light.pos, light.dir, light.castshadow = [0.4, -0.6, 2.2], [-0.2, 0.3, -1], True
+
+    def box(name, size, pos, rgba=None, material=None, gtype=mujoco.mjtGeom.mjGEOM_BOX):
+        g = wb.add_geom()
+        g.name, g.type, g.size, g.pos = name, gtype, size, pos
+        g.contype = g.conaffinity = 0
+        if material:
+            g.material = material
+        else:
+            g.rgba = rgba
+
+    sheet_top = pz - 0.0027
+    desk_top = sheet_top - 0.001
+    cx = px - 0.042
+    box("floor", [2, 2, 0.05], [0, 0, 0], material="grid", gtype=mujoco.mjtGeom.mjGEOM_PLANE)
+    box("desk", [0.22, 0.32, 0.02], [cx, 0, desk_top - 0.02], rgba=[0.55, 0.4, 0.28, 1])
+    leg_h = (desk_top - 0.04) / 2
+    for i, (dx, dy) in enumerate([(-0.2, 0.29), (-0.2, -0.29), (0.2, 0.29), (0.2, -0.29)]):
+        box(f"desk_leg{i}", [0.02, 0.02, leg_h], [cx + dx, dy, leg_h], rgba=[0.15, 0.15, 0.17, 1])
+    box("sheet", [0.105, 0.148, 0.0005], [px - 0.062, 0, sheet_top - 0.0005], rgba=[0.97, 0.97, 0.95, 1])
+    return spec.compile()
 
 
 # --------------------------------------------------------------------------- #
@@ -256,7 +360,7 @@ class Redundancy:
 # The controller, eq. (9) + (10)
 # --------------------------------------------------------------------------- #
 class VariableImpedanceController:
-    def __init__(self, model, law: ImpedanceLaw, redundancy="dci", K_I=100.0, k_D=2.0,
+    def __init__(self, model, law: ImpedanceLaw, redundancy="dci", K_I=100.0, k_D=5.0,
                  force_source="observer", **red_kw):
         self.arm = Arm(model)
         self.law = law
@@ -287,8 +391,11 @@ class VariableImpedanceController:
             comp = a.h - a.qfrc_passive - a.J.T @ F
         tau_imp = -a.J.T @ a.Lam @ (a.Jdot_qd + (D_d * a.xd - F) / lam_d) + comp
 
-        # eq. (10): null-space secondary task + joint damping
+        # eq. (10): null-space secondary task + joint damping. The damping is weighted by
+        # each joint's own inertia (k_D in 1/s), so every joint gets the same damping rate:
+        # with a scalar gain [N m s/rad] the light iiwa wrist (M77 ~ 0.001 kg m^2) would be
+        # over-damped beyond what a 1 kHz loop with 2 ms latency can realize.
         u = self.red(q)
-        tau = tau_imp + a.N @ (u - self.k_D * qd)
+        tau = tau_imp + a.N @ (u - self.k_D * np.diag(a.M) * qd)
         self.tau = tau
         return tau

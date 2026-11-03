@@ -21,7 +21,7 @@ import mujoco
 import numpy as np
 
 from task import HumanOperator, WritingPath
-from vic import (Q_INIT, XML, ImpedanceLaw, VariableImpedanceController, dci,
+from vic import (Q_INIT, load_model, ImpedanceLaw, VariableImpedanceController, dci,
                  manipulability)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def run(law: ImpedanceLaw, redundancy="dci", force_source="observer", T_max=40.0,
         k_h=200.0, view=False, video=None, verbose=True, K_I=100.0, k_c=1.0, k_m=20.0, seed=0,
         speed_scale=1.0, delay_steps=2, tail=0.5, fps=30):
-    m = mujoco.MjModel.from_xml_path(XML)
+    m = load_model()
     d = mujoco.MjData(m)
     dt = m.opt.timestep
     pen = m.site("pen").id
@@ -74,7 +74,7 @@ def run(law: ImpedanceLaw, redundancy="dci", force_source="observer", T_max=40.0
         cam_top = mujoco.MjvCamera()
         _setup_top_cam(cam_top, path)
         top_opt = mujoco.MjvOption()
-        top_opt.geomgroup[1] = 0  # hide the arm in the top-down view, keep the pen tip
+        top_opt.geomgroup[2] = 0  # hide the arm (Menagerie visual group 2) in the top-down view, keep the pen tip
         writer = imageio.get_writer(video, fps=fps, codec="libx264", quality=8,
                                     macro_block_size=8)
         frame_every = int(round(1.0 / (fps * dt)))
@@ -181,8 +181,8 @@ def metrics(log, path, H, unstable):
 # visuals
 # --------------------------------------------------------------------------- #
 def _setup_cam(cam):
-    cam.azimuth, cam.elevation, cam.distance = 105, -42, 1.75
-    cam.lookat[:] = [0.30, 0.0, 0.42]
+    cam.azimuth, cam.elevation, cam.distance = 105, -38, 1.95
+    cam.lookat[:] = [0.28, 0.0, 0.50]
 
 
 def _setup_top_cam(cam, path):
@@ -240,7 +240,7 @@ def main():
     law = ImpedanceLaw(a.law, lam=a.lam, D=a.D)
     if a.low_inertia:
         from vic import Arm
-        dq = np.diag(Arm(mujoco.MjModel.from_xml_path(XML)).Lambda(Q_INIT))
+        dq = np.diag(Arm(load_model()).Lambda(Q_INIT))
         law = ImpedanceLaw("var", lam=0.27 * dq, name="variable D, low inertia")
     run(law, a.redundancy, a.force, view=a.view, video=a.video, seed=a.seed, delay_steps=a.delay)
 
