@@ -20,7 +20,7 @@ import os
 import mujoco
 import numpy as np
 
-from vic import Q_INIT, XML, Arm, ImpedanceLaw
+from vic import Q_INIT, load_model, Arm, ImpedanceLaw
 from writing_sim import run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +32,7 @@ def main():
     ap.add_argument("--only", default=None)
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    dq = np.diag(Arm(mujoco.MjModel.from_xml_path(XML)).Lambda(Q_INIT))
+    dq = np.diag(Arm(load_model()).Lambda(Q_INIT))
     low = ImpedanceLaw("var", lam=0.27 * dq, name="variable D, low inertia")
     clips = {
         "main": (ImpedanceLaw("L1"), "dci"),

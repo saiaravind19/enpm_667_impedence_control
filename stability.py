@@ -27,14 +27,14 @@ from collections import deque
 import mujoco
 import numpy as np
 
-from vic import Q_INIT, XML, Arm, ImpedanceLaw, VariableImpedanceController
+from vic import Q_INIT, load_model, Arm, ImpedanceLaw, VariableImpedanceController
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def shake_test(alpha, D, T=3.0, delay_steps=2, K_I=100.0, k_lo=200.0, k_hi=2000.0,
                amp=0.01, f_shake=2.0, redundancy="dci", lam_bar=None, return_log=False):
-    m = mujoco.MjModel.from_xml_path(XML)
+    m = load_model()
     d = mujoco.MjData(m)
     dt = m.opt.timestep
     pen = m.site("pen").id
@@ -88,7 +88,7 @@ def shake_test(alpha, D, T=3.0, delay_steps=2, K_I=100.0, k_lo=200.0, k_hi=2000.
 
 
 def sweep(alphas, Ds, threshold=0.05, **kw):
-    lam_bar = np.linalg.eigvalsh(Arm(mujoco.MjModel.from_xml_path(XML)).Lambda(Q_INIT)).max()
+    lam_bar = np.linalg.eigvalsh(Arm(load_model()).Lambda(Q_INIT)).max()
     vib = np.zeros((len(alphas), len(Ds)))
     for i, a in enumerate(alphas):
         for j, D in enumerate(Ds):
